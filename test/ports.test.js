@@ -66,3 +66,90 @@ test('CLI finds a real listening server', async (t) => {
   assert.ok(snapshots.slice(0, 2).every(snapshot => snapshot.some(entry => entry.port === port)));
 
 });
+
+test('bind checks, port search, and process details', async (t) => {
+  const { checkPort, findPort } = await import('../src/index.js');
+  const { createSocket } = await import('node:dgram');
+  const server = createServer();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const port = server.address().port;
+  assert.equal(await checkPort(port), false);
+  assert.equal(await findPort({ from: port, to: port }), null);
+  const child = spawn(process.execPath, ['bin/portlense.js', 'check', String(port), '--json']);
+  let output = '';
+  child.stdout.on('data', chunk => { output += chunk; });
+  assert.equal(await new Promise(resolve => child.on('close', resolve)), 1);
+  assert.equal(JSON.parse(output).available, false);
+  if (process.platform !== 'win32') {
+    const details = await getPorts({ port, details: true });
+    const own = details.find(entry => entry.pid === process.pid);
+    assert.ok(own?.user);
+    assert.ok(own?.command);
+  }
+  const udp = createSocket('udp4');
+  await new Promise(resolve => udp.bind(0, '127.0.0.1', resolve));
+  t.after(() => udp.close());
+  assert.equal(await checkPort(udp.address().port, { protocol: 'udp' }), false);
+});
+
+test('watch differences account for duplicate sockets', async () => {
+  const { diffPorts } = await import('../src/index.js');
+  const entry = { protocol: 'TCP', port: 3000, address: '*:3000', state: 'LISTEN', pid: 1, process: 'node' };
+  assert.deepEqual(diffPorts([entry, entry], [entry]), { added: [], removed: [entry] });
+  assert.deepEqual(diffPorts([entry], [entry, entry]), { added: [entry], removed: [] });
+});
+
+test('config defaults can be overridden by CLI options', async (t) => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'portlense-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const config = join(dir, 'config.json');
+  await writeFile(config, JSON.stringify({ color: 'always', sort: 'pid', interval: 1 }));
+  const output = execFileSync(process.execPath, ['bin/portlense.js', '--config', config, '--color', 'never'], { encoding: 'utf8' });
+  assert.doesNotMatch(output, /\x1b\[/);
+  await writeFile(config, '{"sort":"invalid"}');
+  assert.throws(() => execFileSync(process.execPath, ['bin/portlense.js', '--config', config], { stdio: 'pipe' }));
+});
+
+test('TUI renders selection and sanitizes process data', async () => {
+  const { renderTui } = await import('../src/tui.js');
+  const output = renderTui({
+    entries: [{ port: 3000, protocol: 'TCP', state: 'LISTEN', pid: 12, process: 'node', address: '127.0.0.1:3000', user: 'me', command: 'node\x1b[2Jserver.js' }],
+    selected: 0, protocol: '', all: false, query: '', editing: false, error: '', updated: 'now', color: false,
+  });
+  assert.match(output, /› 3000/);
+  assert.match(output, /127\.0\.0\.1:3000/);
+  assert.doesNotMatch(output, /\x1b/);
+});
+
+test('TUI requires a terminal', () => {
+  assert.throws(() => execFileSync(process.execPath, ['bin/portlense.js', '--tui'], { stdio: 'pipe' }), /interactive terminal/);
+});
+
+test('TUI uses the terminal width and anchors details at the bottom', async () => {
+  const { renderTui } = await import('../src/tui.js');
+  const entry = { port: 3000, protocol: 'TCP', state: 'LISTEN', pid: 12, process: 'node', address: '127.0.0.1:3000', user: 'me', command: 'node server.js' };
+  const view = renderTui({ entries: [entry], selected: 0, protocol: '', all: false, query: '', editing: false, error: '', updated: 'now', color: false, width: 100, height: 20 });
+  const lines = view.split('\r\n');
+  assert.equal(lines.length, 20);
+  assert.match(lines[2], /ADDRESS/);
+  assert.match(lines[3], /127\.0\.0\.1:3000/);
+  assert.match(lines[15], /DETAILS/);
+  assert.match(lines[19], /\[q\] Quit/);
+  assert.match(lines[19], /\[\/\] Search/);
+  assert.ok(lines.every(line => line.length <= 99));
+});
+
+
+test('TUI shows search editing shortcuts and wraps help in narrow terminals', async () => {
+  const { renderTui } = await import('../src/tui.js');
+  const base = { entries: [], selected: 0, protocol: '', all: false, query: '', error: '', updated: '', color: false, width: 50, height: 20 };
+  const editing = renderTui({ ...base, editing: true });
+  assert.match(editing, /\[Enter\] Finish search/);
+  const normal = renderTui({ ...base, editing: false });
+  assert.match(normal, /\[\/\] Search/);
+  assert.match(normal, /\[q\] Quit/);
+});
