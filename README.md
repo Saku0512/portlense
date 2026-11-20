@@ -82,25 +82,7 @@ All fields are optional. `interval` applies to watch mode; it must be between 0.
 
 ## JavaScript API
 
-```js
-import { getPorts } from 'portlense';
-
-const ports = await getPorts({ protocol: 'TCP', port: 3000, pid: 1234, process: 'node', state: 'LISTEN', sort: 'port', all: false });
-console.log(ports);
-// [{ protocol: 'TCP', port: 3000, address: '*:3000', state: 'LISTEN', pid: 1234, process: 'node' }]
-```
-
-`protocol`, `port`, `pid`, `process`, `state`, `sort`, `all`, and `details` are optional. With `details: true`, results include `user` and `command` fields. `sort` accepts `port`, `protocol`, `pid`, `process`, or `state`. State matching is case-insensitive. The `process` filter matches a case-insensitive substring of the process name. Results are sorted by port number by default. The process name is an empty string when unavailable.
-
-You can also check a port, find a port in a range, and compare snapshots:
-
-```js
-import { checkPort, findPort, diffPorts } from 'portlense';
-
-const available = await checkPort(3000, { protocol: 'TCP', host: '127.0.0.1' });
-const port = await findPort({ from: 3000, to: 3100 }); // number or null
-const { added, removed } = diffPorts(previousSnapshot, currentSnapshot);
-```
+See the [JavaScript API documentation](docs/javascript-api.md) for examples, port monitoring, and TypeScript support.
 
 ## Development
 

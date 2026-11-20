@@ -153,3 +153,71 @@ test('TUI shows search editing shortcuts and wraps help in narrow terminals', as
   assert.match(normal, /\[\/\] Search/);
   assert.match(normal, /\[q\] Quit/);
 });
+
+test('watchPorts reports actual changes and stops on abort', async (t) => {
+  if (process.platform !== 'win32') {
+    try { execFileSync('lsof', ['-v'], { stdio: 'ignore' }); } catch { return t.skip('lsof unavailable'); }
+  }
+  const { watchPorts } = await import('../src/index.js');
+  const server = createServer();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const controller = new AbortController();
+  const watcher = watchPorts({ port, interval: 100, signal: controller.signal });
+  t.after(() => { controller.abort(); server.close(); });
+  const initial = (await watcher.next()).value;
+  assert.ok(initial.current.some(entry => entry.port === port));
+  assert.deepEqual(initial.added, []);
+  assert.deepEqual(initial.removed, []);
+  initial.current.length = 0;
+  await new Promise(resolve => server.close(resolve));
+  const changed = (await watcher.next()).value;
+  assert.ok(changed.removed.some(entry => entry.port === port));
+  const next = watcher.next();
+  controller.abort();
+  assert.equal((await next).done, true);
+});
+
+test('API rejects invalid options and invalid watch intervals', async () => {
+  const { watchPorts } = await import('../src/index.js');
+  await assert.rejects(getPorts({ protocol: 'invalid' }), /Protocol/);
+  await assert.rejects(getPorts({ port: 0 }), /Port/);
+  await assert.rejects(getPorts({ sort: 'invalid' }), /sort/);
+  await assert.rejects(watchPorts({ interval: 1 }).next(), /Interval/);
+  const controller = new AbortController();
+  controller.abort();
+  assert.equal((await watchPorts({ signal: controller.signal }).next()).done, true);
+});
+
+test('API exposes conflict inspection and table formatting', async (t) => {
+  const { inspectPort, formatPorts } = await import('../src/index.js');
+  const server = createServer();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const port = server.address().port;
+  const inspection = await inspectPort(port);
+  assert.equal(inspection.available, false);
+  assert.equal(inspection.protocol, 'TCP');
+  if (process.platform !== 'win32') assert.ok(inspection.conflicts.some(entry => entry.pid === process.pid));
+  const entry = { port, protocol: 'TCP', state: 'LISTEN', pid: 42, process: 'node', address: '*:' + port, user: 'me', command: 'node server.js' };
+  const table = formatPorts([entry], { color: true, details: true, changes: { added: [entry], removed: [] } });
+  assert.match(table, /\x1b\[/);
+  assert.match(table, /COMMAND/);
+  assert.match(table, /node server\.js/);
+  assert.match(table, /\+/);
+});
+
+test('API configuration loading validates explicit files', async (t) => {
+  const { loadConfig } = await import('../src/index.js');
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'portlense-api-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const config = join(dir, 'config.json');
+  await writeFile(config, '{"interval":1,"color":"never"}');
+  assert.deepEqual(await loadConfig(config), { interval: 1, color: 'never' });
+  await assert.rejects(loadConfig(join(dir, 'missing.json')), /Cannot load config/);
+  await writeFile(config, '{"unknown":true}');
+  await assert.rejects(loadConfig(config), /Invalid config option/);
+});

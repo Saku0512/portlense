@@ -3,11 +3,29 @@
   "version": "0.1.0",
   "description": "A clear view of ports in use on your machine",
   "type": "module",
-  "bin": { "portlense": "./bin/portlense.js" },
+  "bin": {
+    "portlense": "./bin/portlense.js"
+  },
   "exports": "./src/index.js",
-  "files": ["bin", "src", "README.md", "LICENSE"],
-  "scripts": { "test": "node --test" },
-  "engines": { "node": ">=18" },
-  "keywords": ["port", "network", "cli", "process"],
-  "license": "MIT"
+  "files": [
+    "bin",
+    "src",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "port",
+    "network",
+    "cli",
+    "process"
+  ],
+  "license": "MIT",
+  "types": "./src/index.d.ts"
 }

@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const run = promisify(execFile);
 
@@ -46,6 +47,13 @@ export function parseNetstat(output, { all = false } = {}) {
 }
 
 export async function getPorts({ all = false, protocol, port, pid, process: processFilter, state, sort = 'port', details = false } = {}) {
+  if (protocol !== undefined && (typeof protocol !== 'string' || !['TCP', 'UDP'].includes(protocol.toUpperCase()))) throw new TypeError('Protocol must be TCP or UDP.');
+  if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535)) throw new RangeError('Port must be an integer from 1 to 65535.');
+  if (pid !== undefined && (!Number.isSafeInteger(pid) || pid < 1)) throw new RangeError('PID must be a positive integer.');
+  if (!['port', 'protocol', 'pid', 'process', 'state'].includes(sort)) throw new TypeError('Invalid sort field.');
+  if (typeof all !== 'boolean' || typeof details !== 'boolean') throw new TypeError('all and details must be booleans.');
+  if (processFilter !== undefined && typeof processFilter !== 'string') throw new TypeError('Process filter must be a string.');
+  if (state !== undefined && typeof state !== 'string') throw new TypeError('State filter must be a string.');
   let entries;
   if (process.platform === 'win32') {
     const { stdout } = await run('netstat', ['-ano'], { maxBuffer: 16 * 1024 * 1024 });
@@ -86,6 +94,7 @@ export async function getPorts({ all = false, protocol, port, pid, process: proc
 /** Test whether a port can be bound on a particular local address right now. */
 export async function checkPort(port, { protocol = 'TCP', host = '127.0.0.1' } = {}) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Port must be an integer from 1 to 65535.');
+  if (typeof protocol !== 'string') throw new TypeError('Protocol must be TCP or UDP.');
   const type = protocol.toUpperCase();
   if (!['TCP', 'UDP'].includes(type)) throw new Error('Protocol must be TCP or UDP.');
   if (type === 'TCP') {
@@ -143,3 +152,37 @@ export function diffPorts(previous, current) {
   };
   return { added: difference(current, previous), removed: difference(previous, current) };
 }
+
+/** Poll port snapshots until the consumer stops or the signal is aborted. */
+export async function* watchPorts({ interval = 2000, signal, ...options } = {}) {
+  if (!Number.isFinite(interval) || interval < 100 || interval > 86400000) throw new RangeError('Interval must be between 100 and 86400000 milliseconds.');
+  if (signal !== undefined && (typeof signal !== 'object' || signal === null || typeof signal.addEventListener !== 'function' || typeof signal.aborted !== 'boolean')) throw new TypeError('signal must be an AbortSignal.');
+  let previous;
+  while (!signal?.aborted) {
+    const current = await getPorts(options);
+    if (signal?.aborted) return;
+    const changes = previous ? diffPorts(previous, current) : { added: [], removed: [] };
+    // Retain a private copy so consumer mutations do not alter later comparisons.
+    previous = current.map(entry => ({ ...entry }));
+    yield { current, ...changes, timestamp: new Date().toISOString() };
+    if (signal?.aborted) return;
+    try { await delay(interval, undefined, { signal }); }
+    catch (error) { if (error.name === 'AbortError' && signal?.aborted) return; throw error; }
+  }
+}
+
+/** Check a binding and, when occupied, gather process information if available. */
+export async function inspectPort(port, { protocol = 'TCP', host = '127.0.0.1' } = {}) {
+  const available = await checkPort(port, { protocol, host });
+  protocol = protocol.toUpperCase();
+  let conflicts = [];
+  if (!available) {
+    try { conflicts = await getPorts({ port, protocol, details: true }); }
+    catch { /* Binding results are still useful if process enumeration is unavailable. */ }
+  }
+  return { port, protocol, host, available, conflicts };
+}
+
+export { loadConfig } from './config.js';
+export { formatPorts } from './format.js';
+export { runTui } from './tui.js';

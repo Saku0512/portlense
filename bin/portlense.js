@@ -1,10 +1,6 @@
 #!/usr/bin/env node
-import { getPorts, checkPort, findPort, diffPorts } from '../src/index.js';
-import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { getPorts, inspectPort, findPort, diffPorts, loadConfig, formatPorts, runTui } from '../src/index.js';
 import { setTimeout as delay } from 'node:timers/promises';
-import { runTui } from '../src/tui.js';
 
 const help = `portlense — View ports in use
 
@@ -30,24 +26,6 @@ Usage: portlense [options]
   -v, --version            Show version
 `;
 
-async function loadConfig(args) {
-  const index = args.indexOf('--config');
-  if (index !== -1 && (!args[index + 1] || args[index + 1].startsWith('-'))) throw new Error('--config requires a path.');
-  const path = index === -1 ? join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'portlense', 'config.json') : args[index + 1];
-  let config;
-  try { config = JSON.parse(await readFile(path, 'utf8')); }
-  catch (error) { if (index === -1 && error.code === 'ENOENT') return {}; throw new Error(`Cannot load config ${path}: ${error.message}`); }
-  if (!config || typeof config !== 'object' || Array.isArray(config)) throw new Error('Config must be a JSON object.');
-  const validators = {
-    color: v => ['auto', 'always', 'never'].includes(v),
-    sort: v => ['port', 'protocol', 'pid', 'process', 'state'].includes(v),
-    interval: v => typeof v === 'number' && Number.isFinite(v) && v >= 0.1 && v <= 86400,
-    protocol: v => typeof v === 'string' && ['tcp', 'udp'].includes(v.toLowerCase()),
-    all: v => typeof v === 'boolean', details: v => typeof v === 'boolean',
-  };
-  for (const [key, value] of Object.entries(config)) if (!validators[key] || !validators[key](value)) throw new Error(`Invalid config option: ${key}`);
-  return config;
-}
 
 function parseArgs(args, defaults = {}) {
   const options = { ...defaults };
@@ -120,56 +98,24 @@ function parseArgs(args, defaults = {}) {
   return options;
 }
 
-function printTable(entries, useColor = false, details = false, changes = null) {
-  const color = (code, value) => useColor ? `\x1b[${code}m${value}\x1b[0m` : value;
-  if (!entries.length && !changes?.removed.length) { console.log('No matching ports found.'); return; }
-  const allEntries = changes ? [...entries, ...changes.removed] : entries;
-  const addedCounts = new Map();
-  const key = e => JSON.stringify([e.protocol, e.port, e.address, e.state, e.pid, e.process]);
-  for (const entry of changes?.added || []) addedCounts.set(key(entry), (addedCounts.get(key(entry)) || 0) + 1);
-  const rows = allEntries.map((e, index) => {
-    const k = key(e);
-    const added = index < entries.length && (addedCounts.get(k) || 0) > 0;
-    if (added) addedCounts.set(k, addedCounts.get(k) - 1);
-    return [...(changes ? [index >= entries.length ? '-' : added ? '+' : ' '] : []), String(e.port), e.protocol, e.address, e.state || '-', String(e.pid), e.process || '-', ...(details ? [e.user || '-', e.command || '-'] : [])];
-  });
-  const headers = [...(changes ? ['CHANGE'] : []), 'PORT', 'PROTO', 'ADDRESS', 'STATE', 'PID', 'PROCESS', ...(details ? ['USER', 'COMMAND'] : [])];
-  const widths = headers.map((header, i) => Math.max(header.length, ...rows.map(row => row[i].length)));
-  const format = (row, codes = []) => row.map((cell, i) => {
-    const padded = i === row.length - 1 ? cell : cell.padEnd(widths[i]);
-    return codes[i] ? color(codes[i], padded) : padded;
-  }).join('  ');
-  console.log(format(headers, headers.map(() => '1;36')));
-  console.log(color('2', format(widths.map(width => '─'.repeat(width)))));
-  for (const row of rows) {
-    const offset = changes ? 1 : 0;
-    const stateColor = row[offset + 3] === 'LISTEN' ? '32' : row[offset + 3] === 'UNCONN' ? '33' : '36';
-    const codes = ['1', row[offset + 1] === 'TCP' ? '34' : '35', '', stateColor, '2', ''];
-    if (changes) codes.unshift(row[0] === '+' ? '32' : row[0] === '-' ? '31' : '');
-    console.log(format(row, codes));
-  }
-}
 
 try {
   const args = process.argv.slice(2);
-  const options = parseArgs([...args], await loadConfig(args));
+  const configIndex = args.indexOf('--config');
+  if (configIndex !== -1 && (!args[configIndex + 1] || args[configIndex + 1].startsWith('-'))) throw new Error('--config requires a path.');
+  const options = parseArgs([...args], await loadConfig(configIndex === -1 ? undefined : args[configIndex + 1]));
   if (options.help) console.log(help);
   else if (options.version) console.log('0.1.0');
   else if (options.command) {
     const protocol = (options.protocol || 'TCP').toUpperCase();
     const host = options.host || '127.0.0.1';
     if (options.command === 'check') {
-      const available = await checkPort(options.port, { protocol, host });
-      let conflicts = [];
-      if (!available) {
-        try { conflicts = await getPorts({ port: options.port, protocol, details: true }); }
-        catch { /* Binding results are still useful if process enumeration is unavailable. */ }
-      }
-      const result = { port: options.port, protocol, host, available, conflicts };
+      const result = await inspectPort(options.port, { protocol, host });
+      const { available, conflicts } = result;
       if (options.json) console.log(JSON.stringify(result, null, 2));
       else {
         console.log(`${protocol} ${host}:${options.port} is ${available ? 'available' : 'in use'}.`);
-        if (conflicts.length) printTable(conflicts, options.color === 'always' || (options.color !== 'never' && process.stdout.isTTY && !('NO_COLOR' in process.env)), true);
+        if (conflicts.length) console.log(formatPorts(conflicts, { color: options.color === 'always' || (options.color !== 'never' && process.stdout.isTTY && !('NO_COLOR' in process.env)), details: true }));
       }
       if (!available) process.exitCode = 1;
     } else {
@@ -178,7 +124,7 @@ try {
       else console.log(port === null ? 'No available port found in the requested range.' : `Available ${protocol} port on ${host}: ${port}`);
       if (port === null) process.exitCode = 1;
     }
-  } else if (options.tui) await runTui(options);
+  } else if (options.tui) await runTui({ ...options, interval: (options.interval ?? 2) * 1000 });
   else {
     let previous;
     do {
@@ -191,7 +137,7 @@ try {
         }
         const useColor = options.color === 'always' || (options.color !== 'never' && process.stdout.isTTY && !('NO_COLOR' in process.env));
         const changes = options.watch && previous ? diffPorts(previous, entries) : null;
-        printTable(entries, useColor, options.details, changes);
+        console.log(formatPorts(entries, { color: useColor, details: options.details, changes }));
       }
       previous = entries;
       if (options.watch) await delay((options.interval ?? 2) * 1000);

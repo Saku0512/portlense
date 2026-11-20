@@ -73,6 +73,7 @@ export function renderTui({ entries, selected, protocol, all, query, editing, er
 }
 
 export async function runTui(options = {}) {
+  if (options.interval !== undefined && (!Number.isFinite(options.interval) || options.interval < 100 || options.interval > 86400000)) throw new RangeError('Interval must be between 100 and 86400000 milliseconds.');
   if (!process.stdin.isTTY || !process.stdout.isTTY || typeof process.stdin.setRawMode !== 'function') throw new Error('TUI requires an interactive terminal.');
   const input = process.stdin;
   const output = process.stdout;
@@ -140,7 +141,7 @@ export async function runTui(options = {}) {
       output.on('resize', render);
       process.on('SIGINT', onSignal);
       process.on('SIGTERM', onSignal);
-      timer = setInterval(() => void refresh(), (options.interval ?? 2) * 1000);
+      timer = setInterval(() => void refresh(), options.interval ?? 2000);
       render();
       void refresh();
     } catch (err) { cleanup(); reject(err); }
