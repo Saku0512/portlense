@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
+import { getServiceName } from './services.js';
 
 const run = promisify(execFile);
 
@@ -46,7 +47,7 @@ export function parseNetstat(output, { all = false } = {}) {
   return entries;
 }
 
-export async function getPorts({ all = false, protocol, port, pid, process: processFilter, state, sort = 'port', details = false } = {}) {
+export async function getPorts({ all = false, protocol, port, pid, process: processFilter, state, sort = 'port', details = false, search } = {}) {
   if (protocol !== undefined && (typeof protocol !== 'string' || !['TCP', 'UDP'].includes(protocol.toUpperCase()))) throw new TypeError('Protocol must be TCP or UDP.');
   if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535)) throw new RangeError('Port must be an integer from 1 to 65535.');
   if (pid !== undefined && (!Number.isSafeInteger(pid) || pid < 1)) throw new RangeError('PID must be a positive integer.');
@@ -54,6 +55,7 @@ export async function getPorts({ all = false, protocol, port, pid, process: proc
   if (typeof all !== 'boolean' || typeof details !== 'boolean') throw new TypeError('all and details must be booleans.');
   if (processFilter !== undefined && typeof processFilter !== 'string') throw new TypeError('Process filter must be a string.');
   if (state !== undefined && typeof state !== 'string') throw new TypeError('State filter must be a string.');
+  if (search !== undefined && typeof search !== 'string') throw new TypeError('Search must be a string.');
   let entries;
   if (process.platform === 'win32') {
     const { stdout } = await run('netstat', ['-ano'], { maxBuffer: 16 * 1024 * 1024 });
@@ -81,14 +83,16 @@ export async function getPorts({ all = false, protocol, port, pid, process: proc
     && (port === undefined || entry.port === port)
     && (pid === undefined || entry.pid === pid)
     && (!processFilter || entry.process.toLowerCase().includes(processFilter.toLowerCase()))
-    && (!state || entry.state.toUpperCase() === state.toUpperCase()))
+    && (!state || entry.state.toUpperCase() === state.toUpperCase())
+    && (!search || String(entry.port).includes(search) || entry.process.toLowerCase().includes(search.toLowerCase())))
     .sort((a, b) => {
       const left = a[sort];
       const right = b[sort];
       const primary = typeof left === 'number' ? left - right : String(left ?? '').localeCompare(String(right ?? ''), undefined, { sensitivity: 'base' });
       return primary || a.port - b.port || a.protocol.localeCompare(b.protocol) || a.pid - b.pid;
     });
-  return details ? addProcessDetails(filtered) : filtered;
+  const enriched = filtered.map(entry => ({ ...entry, service: getServiceName(entry.port, entry.protocol) }));
+  return details ? addProcessDetails(enriched) : enriched;
 }
 
 /** Test whether a port can be bound on a particular local address right now. */
@@ -186,3 +190,6 @@ export async function inspectPort(port, { protocol = 'TCP', host = '127.0.0.1' }
 export { loadConfig } from './config.js';
 export { formatPorts } from './format.js';
 export { runTui } from './tui.js';
+
+export { getServiceName } from './services.js';
+export { stopPortProcess, alertPortChanges } from './actions.js';

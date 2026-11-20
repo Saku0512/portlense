@@ -8,7 +8,7 @@ console.log(ports);
 // [{ protocol: 'TCP', port: 3000, address: '*:3000', state: 'LISTEN', pid: 1234, process: 'node' }]
 ```
 
-`protocol`, `port`, `pid`, `process`, `state`, `sort`, `all`, and `details` are optional. With `details: true`, results include `user` and `command` fields. `sort` accepts `port`, `protocol`, `pid`, `process`, or `state`. State matching is case-insensitive. The `process` filter matches a case-insensitive substring of the process name. Results are sorted by port number by default. The process name is an empty string when unavailable.
+`protocol`, `port`, `pid`, `process`, `search`, `state`, `sort`, `all`, and `details` are optional. With `details: true`, results include `user` and `command` fields. `sort` accepts `port`, `protocol`, `pid`, `process`, or `state`. State matching is case-insensitive. The `process` filter matches a case-insensitive substring of the process name. `search` matches a port number substring or a case-insensitive process name substring. Entries include `service`, a conventional service name or an empty string if unknown. Results are sorted by port number by default. The process name is an empty string when unavailable.
 
 You can also check a port, find a port in a range, and compare snapshots:
 
@@ -91,3 +91,25 @@ await runTui({ protocol: 'TCP', interval: 1000, color: 'auto' });
 `runTui` accepts the `getPorts` filters plus `interval` in milliseconds and `color` (`auto`, `always`, or `never`). It uses the process's interactive standard input and output, and resolves when the user quits. It rejects when there is no interactive terminal. It temporarily controls the terminal screen and input mode.
 
 The CLI's JSON output is standard JSON serialization; use `JSON.stringify` with the objects returned by these APIs. The TUI, formatted output, configuration, checking, searching, filtering, process details, and monitoring are also available independently.
+
+
+## Search, services, sound alerts, and stopping processes
+
+```js
+import { getPorts, getServiceName, watchPorts, alertPortChanges, stopPortProcess } from 'portlense';
+
+const matches = await getPorts({ search: '3000' });
+console.log(getServiceName(443, 'TCP')); // HTTPS
+
+// Explicitly request a stop after confirming the selected process with the user:
+// await stopPortProcess(matches[0]);
+
+const controller = new AbortController();
+for await (const snapshot of watchPorts({ signal: controller.signal })) {
+  alertPortChanges(snapshot); // terminal bell when added or removed is nonempty
+}
+```
+
+Service names are conventional port labels, not a guarantee about the service. `stopPortProcess` rechecks the socket and sends SIGTERM to its PID; it ends the whole process, potentially closing multiple sockets. This check cannot eliminate the race between verification and signaling. It rejects if the socket has changed, permissions are insufficient, or the PID is protected (1 or the calling process). No user confirmation is performed by the API: callers must obtain confirmation themselves. On Windows, Node.js emulates SIGTERM as a forced process termination.
+
+`alertPortChanges` returns whether it emitted a bell. A terminal or OS may silence it. It accepts an optional `{ stream }` with a `write` method. With `runTui({ alerts: true })`, alerts are enabled on startup; the user can toggle them with `n`.

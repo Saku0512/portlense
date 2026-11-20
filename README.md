@@ -29,6 +29,8 @@ portlense --port 3000          # Filter by port number
 portlense --protocol tcp       # Filter by tcp or udp
 portlense --pid 1234           # Filter by process ID
 portlense --process node       # Filter by process name (case-insensitive substring)
+portlense --search 3000        # Search by port number or process name
+portlense --tui --alerts       # Start TUI with sound alerts enabled
 portlense --details            # Include process user and command
 portlense --state LISTEN       # Filter by socket state
 portlense --sort process       # Sort by port, protocol, pid, process, or state
@@ -55,11 +57,15 @@ Use `--details` to show each process's user and command. On Unix this uses `ps`;
 Run `portlense --tui` in an interactive terminal. The display refreshes every two seconds by default; use `--interval` to change this. Existing filters such as `--port`, `--pid`, `--process`, and `--sort` apply on startup. The selected socket's address, user, and command are shown below the list when available.
 
 - **↑ / ↓** or **k / j**: select a socket.
-- **/**: edit the case-insensitive process name filter; press Enter or Escape to finish.
+- **/**: search by port number or process name; press Enter or Escape to finish.
 - **p**: cycle through all protocols, TCP, and UDP.
 - **a**: toggle inclusion of non-listening TCP connections.
 - **r**: refresh now.
+- **n**: toggle terminal sound alerts for changes in the current filtered view.
+- **x**: stop the selected process after reviewing the PID and confirming with **y**; **n** or **Esc** cancels.
 - **q** or **Ctrl+C**: quit and restore the terminal.
+
+Sound alerts use the terminal bell and depend on terminal settings; changing filters resets the alert baseline. Stopping a process closes all of its sockets. Portlense rechecks the selected socket before sending SIGTERM, but process identity can still change between the check and the signal. Service names are common port conventions, not proof of the service actually running.
 
 The TUI requires an interactive terminal and cannot be combined with `--json` or `--watch`. Process details are best effort and may be unavailable due to permissions.
 

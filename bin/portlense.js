@@ -12,6 +12,8 @@ Usage: portlense [options]
   -t, --protocol <type>    Filter by protocol: tcp or udp
       --pid <number>       Filter by process ID
       --process <name>     Filter by process name (case-insensitive substring)
+      --search <query>     Search by port number or process name
+      --alerts             Enable TUI sound alerts
       --state <state>      Filter by socket state (e.g. LISTEN)
       --sort <field>       Sort by port, protocol, pid, process, or state
   -d, --details            Include process user and command
@@ -47,6 +49,8 @@ function parseArgs(args, defaults = {}) {
     else if (arg === '-j' || arg === '--json') options.json = true;
     else if (arg === '-w' || arg === '--watch') options.watch = true;
     else if (arg === '--tui') options.tui = true;
+    else if (arg === '--alerts') options.alerts = true;
+    else if (arg === '--search') { const value = args[++i]; if (!value || value.startsWith('-')) throw new Error('--search requires a query.'); options.search = value; }
     else if (arg === '--pid') {
       const value = args[++i];
       if (!value || !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1) throw new Error('--pid must be a positive integer.');
@@ -83,6 +87,7 @@ function parseArgs(args, defaults = {}) {
     } else throw new Error(`Unknown option: ${arg}`);
   }
   if (args.includes('--interval') && !options.watch && !options.tui) throw new Error('--interval requires --watch or --tui.');
+  if (options.alerts && !options.tui) throw new Error('--alerts requires --tui.');
   if (options.tui && (options.watch || options.json || options.command)) throw new Error('--tui cannot be combined with --watch, --json, or a command.');
   if (options.command) {
     const allowed = new Set(['--protocol', '-t', '--host', '--json', '-j', '--config', '--color', '--help', '-h', '--version', '-v', ...(options.command === 'find' ? ['--from', '--to'] : [])]);

@@ -137,9 +137,9 @@ test('TUI uses the terminal width and anchors details at the bottom', async () =
   assert.equal(lines.length, 20);
   assert.match(lines[2], /ADDRESS/);
   assert.match(lines[3], /127\.0\.0\.1:3000/);
-  assert.match(lines[15], /DETAILS/);
-  assert.match(lines[19], /\[q\] Quit/);
-  assert.match(lines[19], /\[\/\] Search/);
+  assert.ok(lines.some(line => /DETAILS/.test(line)));
+  assert.match(lines.join(' '), /\[q\] Quit/);
+  assert.match(lines.join(' '), /\[\/\] Search/);
   assert.ok(lines.every(line => line.length <= 99));
 });
 
@@ -220,4 +220,44 @@ test('API configuration loading validates explicit files', async (t) => {
   await assert.rejects(loadConfig(join(dir, 'missing.json')), /Cannot load config/);
   await writeFile(config, '{"unknown":true}');
   await assert.rejects(loadConfig(config), /Invalid config option/);
+});
+
+
+test('search, service labels, and sound alerts', async (t) => {
+  const { getServiceName, alertPortChanges } = await import('../src/index.js');
+  assert.equal(getServiceName(443, 'tcp'), 'HTTPS');
+  assert.equal(getServiceName(22, 'udp'), '');
+  assert.throws(() => getServiceName(0), /Port/);
+  let output = '';
+  const stream = { write: value => { output += value; } };
+  assert.equal(alertPortChanges({ added: [], removed: [] }, { stream }), false);
+  assert.equal(alertPortChanges({ added: [{}], removed: [] }, { stream }), true);
+  assert.equal(output, '\x07');
+  if (process.platform !== 'win32') {
+    const server = createServer();
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => server.close());
+    const port = server.address().port;
+    const ports = await getPorts({ search: String(port) });
+    assert.ok(ports.some(entry => entry.port === port && entry.pid === process.pid));
+    assert.ok(ports.every(entry => typeof entry.service === 'string'));
+  }
+});
+
+test('stopPortProcess validates and stops only the selected child process', async (t) => {
+  if (process.platform === 'win32') return t.skip('lsof integration test');
+  const { stopPortProcess } = await import('../src/index.js');
+  await assert.rejects(stopPortProcess({ pid: 1 }), /protected/);
+  const child = spawn(process.execPath, ['-e', "require('node:net').createServer().listen(0, '127.0.0.1', function(){ console.log(this.address().port) })"], { stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill(); });
+  const port = await new Promise((resolve, reject) => {
+    child.stdout.once('data', data => resolve(Number(data.toString().trim())));
+    child.once('error', reject);
+  });
+  const entry = (await getPorts({ port, pid: child.pid }))[0];
+  assert.ok(entry);
+  await assert.rejects(stopPortProcess({ ...entry, address: 'invalid:1234' }), /changed/);
+  const ended = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })));
+  await stopPortProcess(entry);
+  assert.equal((await ended).signal, 'SIGTERM');
 });

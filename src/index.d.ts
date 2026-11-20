@@ -8,6 +8,7 @@ export interface PortEntry {
   state: string;
   pid: number;
   process: string;
+  service?: string;
   user?: string;
   command?: string;
 }
@@ -17,6 +18,7 @@ export interface PortOptions {
   port?: number;
   pid?: number;
   process?: string;
+  search?: string;
   state?: string;
   sort?: SortField;
   details?: boolean;
@@ -53,4 +55,11 @@ export interface PortInspection {
 export function inspectPort(port: number, options?: BindOptions): Promise<PortInspection>;
 export function loadConfig(path?: string): Promise<PortConfig>;
 export function formatPorts(entries: PortEntry[], options?: { color?: boolean; details?: boolean; changes?: PortChanges | null }): string;
-export function runTui(options?: PortOptions & { interval?: number; color?: ColorMode }): Promise<void>;
+export function runTui(options?: PortOptions & { interval?: number; color?: ColorMode; alerts?: boolean }): Promise<void>;
+
+/** Returns a conventional service name or an empty string if unknown. */
+export function getServiceName(port: number, protocol?: Protocol): string;
+/** Rechecks the selected socket, then sends SIGTERM to its process. */
+export function stopPortProcess(entry: PortEntry): Promise<void>;
+/** Emits a terminal bell when changes are present; returns whether a bell was written. */
+export function alertPortChanges(changes: PortChanges, options?: { stream?: { write(value: string): unknown } }): boolean;

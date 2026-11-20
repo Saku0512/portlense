@@ -1,4 +1,4 @@
-import { getPorts } from './index.js';
+import { getPorts, diffPorts, stopPortProcess, alertPortChanges } from './index.js';
 
 const ESC = '\x1b[';
 const clean = value => String(value ?? '').replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
@@ -8,14 +8,14 @@ const truncate = (value, width) => {
   return text.length <= width ? text : text.slice(0, Math.max(0, width - 1)) + '…';
 };
 
-export function renderTui({ entries, selected, protocol, all, query, editing, error, updated, width = 80, height = 24, color = true }) {
+export function renderTui({ entries, selected, protocol, all, query, editing, error, updated, confirm, alerts = false, width = 80, height = 24, color = true }) {
   const paint = (code, value) => color ? `${ESC}${code}m${value}${ESC}0m` : value;
   const columns = Math.max(1, width - 1);
   const line = value => truncate(value, columns);
   const pad = (value, size) => truncate(value, size).padEnd(size);
   const current = entries[selected];
   const details = current ? [
-    `Address  ${clean(current.address)}`,
+    `Address  ${clean(current.address)}  Service: ${clean(current.service || "-")}`,
     `User     ${clean(current.user || '-')}`,
     `Command  ${clean(current.command || '-')}`,
   ] : ['Select a socket to see its details.'];
@@ -29,9 +29,11 @@ export function renderTui({ entries, selected, protocol, all, query, editing, er
     }
     detailLines.push(line(remaining));
   }
-  const shortcuts = editing
+  const shortcuts = confirm
+    ? [['y', 'Confirm stop'], ['n/Esc', 'Cancel']]
+    : editing
     ? [['Enter', 'Finish search'], ['Esc', 'Finish search'], ['Backspace', 'Delete']]
-    : [['↑/↓', 'Select'], ['/', 'Search'], ['p', 'Protocol'], ['a', 'TCP mode'], ['r', 'Refresh'], ['q', 'Quit']];
+    : [['↑/↓', 'Select'], ['/', 'Search'], ['p', 'Protocol'], ['a', 'TCP mode'], ['r', 'Refresh'], ['n', 'Sound'], ['x', 'Stop'], ['q', 'Quit']];
   const helpLines = [];
   let helpLine = '';
   for (const [key, label] of shortcuts) {
@@ -43,6 +45,7 @@ export function renderTui({ entries, selected, protocol, all, query, editing, er
   const footer = [
     paint('1;36', line(' DETAILS '.padEnd(columns, '─'))),
     ...detailLines.map(line),
+    ...(confirm ? [paint('31', line(`Stop PID ${confirm.pid} (${clean(confirm.process || '-')})? This ends the process and all its sockets. [y] Confirm  [n] Cancel`))] : []),
     ...(error ? [paint('31', line(`Error: ${error}`))] : []),
     ...helpLines.map(text => paint('36', text)),
   ];
@@ -79,18 +82,24 @@ export async function runTui(options = {}) {
   const output = process.stdout;
   const originalRaw = input.isRaw;
   let entries = [], selected = 0, protocol = options.protocol?.toUpperCase() || '', all = !!options.all;
-  let query = options.process || '', editing = false, error = '', updated = '', stopped = false, pending = false, queued = false;
+  let query = options.search || options.process || '', editing = false, error = '', updated = '', stopped = false, pending = false, queued = false;
+  let alerts = !!options.alerts, previous, revision = 0, confirm = null;
   const color = options.color === 'always' || (options.color !== 'never' && !('NO_COLOR' in process.env));
   const render = () => {
     if (stopped) return;
-    output.write(`${ESC}H${ESC}2J${renderTui({ entries, selected, protocol, all, query, editing, error, updated, width: output.columns || 80, height: output.rows || 24, color })}`);
+    output.write(`${ESC}H${ESC}2J${renderTui({ entries, selected, protocol, all, query, editing, error, updated, confirm, alerts, width: output.columns || 80, height: output.rows || 24, color })}`);
   };
   const refresh = async () => {
     if (pending) { queued = true; return; }
     pending = true;
+    const currentRevision = revision;
     try {
-      const result = await getPorts({ ...options, protocol: protocol || undefined, all, process: query || undefined, details: true });
-      if (!stopped) { entries = result; selected = Math.max(0, Math.min(selected, entries.length - 1)); error = ''; updated = new Date().toLocaleTimeString(); }
+      const result = await getPorts({ ...options, protocol: protocol || undefined, all, process: undefined, search: query || undefined, details: true });
+      if (!stopped && revision === currentRevision) {
+        if (alerts && previous) alertPortChanges(diffPorts(previous, result), { stream: output });
+        previous = result;
+        entries = result; selected = Math.max(0, Math.min(selected, entries.length - 1)); error = ''; updated = new Date().toLocaleTimeString();
+      }
     } catch (err) { if (!stopped) error = err.message; }
     finally {
       pending = false;
@@ -114,19 +123,28 @@ export async function runTui(options = {}) {
     const onSignal = () => finish();
     const handleKey = key => {
       if (key === '\u0003') return finish();
-      if (editing) {
+      if (confirm) {
+        if (key === 'y' || key === 'Y') {
+          const target = confirm;
+          confirm = null;
+          void stopPortProcess(target).then(() => { error = ''; void refresh(); }, err => { error = err.message; render(); });
+        } else if (key === 'n' || key === 'N' || key === '\u001b') confirm = null;
+        render();
+      } else if (editing) {
         if (key === '\r' || key === '\n' || key === '\u001b') editing = false;
         else if (key === '\u007f' || key === '\b') query = query.slice(0, -1);
         else if (!/[\x00-\x1f\x7f-\x9f]/.test(key)) query += key;
-        selected = 0;
+        selected = 0; previous = undefined; revision++;
         render();
         void refresh();
       } else if (key === 'q' || key === 'Q') finish();
       else if (key === '\u001b[A' || key === 'k') { selected = Math.max(0, selected - 1); render(); }
       else if (key === '\u001b[B' || key === 'j') { selected = Math.min(Math.max(0, entries.length - 1), selected + 1); render(); }
       else if (key === '/') { editing = true; render(); }
-      else if (key === 'p') { protocol = protocol === '' ? 'TCP' : protocol === 'TCP' ? 'UDP' : ''; selected = 0; void refresh(); }
-      else if (key === 'a') { all = !all; selected = 0; void refresh(); }
+      else if (key === 'p') { protocol = protocol === '' ? 'TCP' : protocol === 'TCP' ? 'UDP' : ''; selected = 0; previous = undefined; revision++; void refresh(); }
+      else if (key === 'a') { all = !all; selected = 0; previous = undefined; revision++; void refresh(); }
+      else if (key === 'n') { alerts = !alerts; previous = undefined; render(); }
+      else if (key === 'x' && entries[selected]) { confirm = { ...entries[selected] }; render(); }
       else if (key === 'r') void refresh();
     };
     const onData = buffer => {
