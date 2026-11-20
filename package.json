@@ -27,5 +27,9 @@
     "process"
   ],
   "license": "MIT",
-  "types": "./src/index.d.ts"
+  "types": "./src/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Saku0512/portlense.git"
+  }
 }
