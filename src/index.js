@@ -45,7 +45,7 @@ export function parseNetstat(output, { all = false } = {}) {
   return entries;
 }
 
-export async function getPorts({ all = false, protocol, port } = {}) {
+export async function getPorts({ all = false, protocol, port, pid, process: processFilter, state, sort = 'port' } = {}) {
   let entries;
   if (process.platform === 'win32') {
     const { stdout } = await run('netstat', ['-ano'], { maxBuffer: 16 * 1024 * 1024 });
@@ -69,6 +69,15 @@ export async function getPorts({ all = false, protocol, port } = {}) {
       else throw error;
     }
   }
-  return entries.filter(entry => (!protocol || entry.protocol === protocol.toUpperCase()) && (port === undefined || entry.port === port))
-    .sort ( (a, b) => a.port - b.port || a.protocol.localeCompare(b.protocol) || a.pid - b.pid );
+  return entries.filter(entry => (!protocol || entry.protocol === protocol.toUpperCase())
+    && (port === undefined || entry.port === port)
+    && (pid === undefined || entry.pid === pid)
+    && (!processFilter || entry.process.toLowerCase().includes(processFilter.toLowerCase()))
+    && (!state || entry.state.toUpperCase() === state.toUpperCase()))
+    .sort((a, b) => {
+      const left = a[sort];
+      const right = b[sort];
+      const primary = typeof left === 'number' ? left - right : String(left ?? '').localeCompare(String(right ?? ''), undefined, { sensitivity: 'base' });
+      return primary || a.port - b.port || a.protocol.localeCompare(b.protocol) || a.pid - b.pid;
+    });
 }
